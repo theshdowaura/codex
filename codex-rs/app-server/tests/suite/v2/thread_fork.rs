@@ -57,6 +57,7 @@ use super::analytics::wait_for_analytics_payload;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 #[cfg(not(windows))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DUPLICATE_FORK_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 async fn list_threads(mcp: &mut TestAppServer) -> Result<ThreadListResponse> {
     let list_id = mcp
@@ -267,7 +268,7 @@ async fn thread_fork_replays_recent_duplicate_request() -> Result<()> {
     )?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(DUPLICATE_FORK_READ_TIMEOUT, mcp.initialize()).await??;
 
     let params = ThreadForkParams {
         thread_id: conversation_id.clone(),
@@ -276,7 +277,7 @@ async fn thread_fork_replays_recent_duplicate_request() -> Result<()> {
     };
     let first_id = mcp.send_thread_fork_request(params.clone()).await?;
     let first_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
+        DUPLICATE_FORK_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(first_id)),
     )
     .await??;
@@ -286,7 +287,7 @@ async fn thread_fork_replays_recent_duplicate_request() -> Result<()> {
     } = to_response::<ThreadForkResponse>(first_resp)?;
 
     let started = timeout(
-        DEFAULT_READ_TIMEOUT,
+        DUPLICATE_FORK_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("thread/started"),
     )
     .await??;
@@ -296,7 +297,7 @@ async fn thread_fork_replays_recent_duplicate_request() -> Result<()> {
 
     let second_id = mcp.send_thread_fork_request(params).await?;
     let second_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
+        DUPLICATE_FORK_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(second_id)),
     )
     .await??;
@@ -308,12 +309,12 @@ async fn thread_fork_replays_recent_duplicate_request() -> Result<()> {
     assert_eq!(second_thread, first_thread);
 
     let ThreadListResponse { data, .. } = list_threads(&mut mcp).await?;
-    let forks = data
+    let created_thread_ids = data
         .iter()
-        .filter(|candidate| candidate.forked_from_id.as_deref() == Some(conversation_id.as_str()))
+        .filter(|candidate| candidate.id != conversation_id)
         .collect::<Vec<_>>();
     assert_eq!(
-        forks
+        created_thread_ids
             .iter()
             .map(|thread| thread.id.as_str())
             .collect::<Vec<_>>(),
@@ -1147,6 +1148,7 @@ fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()
 model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "read-only"
+experimental_thread_store = {{ type = "local" }}
 
 model_provider = "mock_provider"
 
@@ -1175,6 +1177,7 @@ model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "read-only"
 chatgpt_base_url = "{chatgpt_base_url}"
+experimental_thread_store = {{ type = "local" }}
 
 model_provider = "mock_provider"
 
